@@ -250,7 +250,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         code = exc.code
         message = str(exc.message).casefold()
         status = str(exc.status).casefold()
-        logger.warning("Gemini API request failed (status=%s)", code)
+        logger.warning("Gemini API request failed (http_status=%s, provider_status=%s)", code, exc.status)
         quota_error = "quota" in message or "resource_exhausted" in message or status == "resource_exhausted"
         if code == 429 and quota_error:
             raise HTTPException(
@@ -264,10 +264,24 @@ def chat(request: ChatRequest) -> ChatResponse:
                 status_code=503,
                 detail="Gemini rejected the configured API key or its permissions. Update GEMINI_API_KEY in the hosting settings.",
             ) from exc
+        invalid_key = "api key not valid" in message or "invalid api key" in message
+        if code == 400 and invalid_key:
+            raise HTTPException(
+                status_code=503,
+                detail="The configured Gemini API key is invalid. Create a Gemini API key in Google AI Studio and update GEMINI_API_KEY.",
+            ) from exc
         if code == 404:
             raise HTTPException(
                 status_code=503,
-                detail="The configured Gemini model is unavailable. Check GEMINI_MODEL in the hosting settings.",
+                detail=(
+                    "Gemini could not access the selected model. Confirm that GEMINI_MODEL is supported "
+                    "and that GEMINI_API_KEY belongs to a project with Gemini API access enabled."
+                ),
+            ) from exc
+        if code == 400:
+            raise HTTPException(
+                status_code=502,
+                detail="Gemini rejected the request. Check the configured model and request settings.",
             ) from exc
         if code in {408, 504}:
             raise HTTPException(status_code=504, detail="The assistant took too long to respond. Please try again.") from exc
