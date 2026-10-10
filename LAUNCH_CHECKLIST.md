@@ -6,7 +6,7 @@
 - [x] Warn that timings, closures, entry rules, prices, and fees may change.
 - [x] Add favicon and sample privacy and terms pages.
 - [x] Configure Render for public access with its default hostname and no shared-password gate.
-- [ ] Connect this private GitHub repository to Render, set `OPENAI_API_KEY` through Render secrets, and deploy.
+- [ ] Connect this GitHub repository to Render, set `GEMINI_API_KEY` through Render secrets, and deploy.
 - [ ] Verify the public URL, HTTPS, API health, chat, legal pages, mobile layout, and provider error handling.
 - [ ] Add API spend alerts/limits and abuse controls before broad public promotion.
 - [ ] Human-review evaluation responses and source details.

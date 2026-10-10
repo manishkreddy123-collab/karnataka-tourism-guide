@@ -1,4 +1,4 @@
-"""A small, auditable domain assistant backed by OpenAI Responses API."""
+"""A small, auditable domain assistant backed by the Gemini API."""
 from __future__ import annotations
 
 import base64
@@ -12,14 +12,17 @@ import uuid
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+import httpx
+from google import genai
+from google.genai import errors, types
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, RateLimitError
 from pydantic import BaseModel, Field
 from starlette.responses import Response
 
@@ -27,7 +30,7 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 DB_PATH = Path(os.getenv("DATABASE_PATH", str(ROOT / "chatbot.db")))
 KNOWLEDGE_PATH = ROOT / "knowledge.md"
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 HISTORY_LIMIT = 20
 REQUIRE_APP_AUTH = os.getenv("REQUIRE_APP_AUTH", "false").strip().casefold() in {"1", "true", "yes"}
 logger = logging.getLogger(__name__)
@@ -145,14 +148,18 @@ STYLE: Respond in clear, warm English. Use short sections or bullets for itinera
 """
 
 
-def make_client() -> OpenAI:
-    key = os.getenv("OPENAI_API_KEY", "").strip()
+@lru_cache(maxsize=1)
+def make_client() -> genai.Client:
+    key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
-        candidate = os.getenv("new_api_key", "").strip()
-        key = candidate if candidate.startswith("sk-") else ""
-    if not key:
-        raise HTTPException(status_code=503, detail="Chat is not configured yet. Add OPENAI_API_KEY to the server's .env file.")
-    return OpenAI(api_key=key, timeout=20.0, max_retries=1)
+        raise HTTPException(status_code=503, detail="Chat is not configured yet. Add GEMINI_API_KEY to the server's environment.")
+    return genai.Client(
+        api_key=key,
+        http_options=types.HttpOptions(
+            timeout=20_000,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
+    )
 
 
 def get_history(session_id: str) -> list[dict[str, str]]:
@@ -218,45 +225,62 @@ def chat(request: ChatRequest) -> ChatResponse:
         db.execute("INSERT INTO messages VALUES (?,?,?,?,?,?,?)", (str(uuid.uuid4()), request.session_id, "user", message, None, None, now_iso()))
     history = get_history(request.session_id)
     try:
-        response = make_client().responses.create(model=MODEL, instructions=f"{PERSONA}\n\n--- KARNATAKA TOURISM GUIDE KNOWLEDGE ---\n{knowledge}\n--- END GUIDE ---", input=history, store=False)
-        reply = (response.output_text or "").strip()
+        contents = [
+            types.Content(
+                role="user" if item["role"] == "user" else "model",
+                parts=[types.Part.from_text(text=item["content"])],
+            )
+            for item in history
+        ]
+        response = make_client().models.generate_content(
+            model=MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=f"{PERSONA}\n\n--- KARNATAKA TOURISM GUIDE KNOWLEDGE ---\n{knowledge}\n--- END GUIDE ---",
+                max_output_tokens=800,
+            ),
+        )
+        reply = (response.text or "").strip()
         if not reply:
             raise HTTPException(status_code=502, detail="The assistant returned an empty reply. Please try again.")
-        tokens = getattr(getattr(response, "usage", None), "total_tokens", None)
+        tokens = getattr(getattr(response, "usage_metadata", None), "total_token_count", None)
     except HTTPException:
         raise
-    except RateLimitError as exc:
-        error_code = getattr(exc, "code", None)
-        error_type = getattr(exc, "type", None)
-        logger.warning(
-            "OpenAI rate limit or quota error (code=%s, type=%s, request_id=%s)",
-            error_code,
-            error_type,
-            exc.request_id,
-        )
-        if error_code in {"insufficient_quota", "billing_hard_limit_reached"} or error_type == "insufficient_quota":
+    except errors.APIError as exc:
+        code = exc.code
+        message = str(exc.message).casefold()
+        status = str(exc.status).casefold()
+        logger.warning("Gemini API request failed (status=%s)", code)
+        quota_error = "quota" in message or "resource_exhausted" in message or status == "resource_exhausted"
+        if code == 429 and quota_error:
             raise HTTPException(
                 status_code=503,
-                detail="The OpenAI API project has no available quota. Check its billing status and usage limits.",
+                detail="The Gemini API project has no available quota. Check its billing status and usage limits.",
             ) from exc
-        raise HTTPException(status_code=429, detail="The assistant is receiving too many requests. Please wait a moment and try again.") from exc
-    except APITimeoutError as exc:
-        raise HTTPException(status_code=504, detail="The assistant took too long to respond. Please try again.") from exc
-    except APIConnectionError as exc:
-        raise HTTPException(status_code=503, detail="Could not reach the assistant service. Check the connection and try again.") from exc
-    except APIStatusError as exc:
-        logger.error("OpenAI API request failed (status=%s, request_id=%s)", exc.status_code, exc.request_id)
-        if exc.status_code in {401, 403}:
+        if code == 429:
+            raise HTTPException(status_code=429, detail="The assistant is receiving too many requests. Please wait a moment and try again.") from exc
+        if code in {401, 403}:
             raise HTTPException(
                 status_code=503,
-                detail="OpenAI rejected the configured API key or its permissions. Update OPENAI_API_KEY in the hosting settings.",
+                detail="Gemini rejected the configured API key or its permissions. Update GEMINI_API_KEY in the hosting settings.",
             ) from exc
-        if exc.status_code == 404:
+        if code == 404:
             raise HTTPException(
                 status_code=503,
-                detail="The configured OpenAI model is unavailable. Check OPENAI_MODEL in the hosting settings.",
+                detail="The configured Gemini model is unavailable. Check GEMINI_MODEL in the hosting settings.",
             ) from exc
+        if code in {408, 504}:
+            raise HTTPException(status_code=504, detail="The assistant took too long to respond. Please try again.") from exc
+        if code == 503:
+            raise HTTPException(status_code=503, detail="The Gemini service is temporarily unavailable. Please try again.") from exc
         raise HTTPException(status_code=502, detail="The assistant service returned an error. Please try again later.") from exc
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise HTTPException(status_code=504, detail="The assistant took too long to respond. Please try again.") from exc
+    except httpx.HTTPError as exc:
+        logger.warning("Could not reach Gemini service (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Could not reach the Gemini service. Check the connection and try again.") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="Could not reach the Gemini service. Check the connection and try again.") from exc
     elapsed = round((time.perf_counter() - started) * 1000)
     reply_id = str(uuid.uuid4())
     with connect() as db:

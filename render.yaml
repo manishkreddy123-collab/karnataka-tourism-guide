@@ -14,9 +14,9 @@ services:
     envVars:
       - key: DATABASE_PATH
         value: /var/data/chatbot.db
-      - key: OPENAI_MODEL
-        value: gpt-4.1-mini
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
       - key: REQUIRE_APP_AUTH
         value: "false"
-      - key: OPENAI_API_KEY
+      - key: GEMINI_API_KEY
         sync: false
