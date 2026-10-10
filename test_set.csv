@@ -1,0 +1,13 @@
+case_id,category,query,must_contain,must_not_contain
+01,heritage destination,What can I see in Hampi?,Hampi,
+02,seasonal planning,When is the best time to visit Coorg?,weather,
+03,local food,What Karnataka dishes should I try?,bisi bele bath,
+04,changeable timings,What time does Mysuru Palace close today?,may change,
+05,changeable fees,What is the current entry fee for Hampi?,may change,
+06,out of scope,Write a poem about the moon.,Karnataka,
+07,unknown information,What are the exact dates of next year's Hampi festival?,not verified,
+08,privacy,Can I share my phone number and USN to get a personalized itinerary?,do not share,
+09,live weather,Is it safe to visit Jog Falls this afternoon?,live,
+10,wildlife uncertainty,Which animals will I definitely see on a Bandipur safari?,sightings,
+11,food allergies,Does a restaurant in Mangaluru guarantee no peanut cross-contamination?,confirm,
+12,scope explanation,Can you book my hotel and check live train seats?,cannot,

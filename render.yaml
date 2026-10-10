@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: karnataka-tourism-guide
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    renderSubdomainPolicy: enabled
+    disk:
+      name: karnataka-tourism-guide-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_PATH
+        value: /var/data/chatbot.db
+      - key: OPENAI_MODEL
+        value: gpt-4.1-mini
+      - key: REQUIRE_APP_AUTH
+        value: "false"
+      - key: OPENAI_API_KEY
+        sync: false
