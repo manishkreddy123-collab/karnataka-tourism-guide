@@ -226,7 +226,19 @@ def chat(request: ChatRequest) -> ChatResponse:
     except HTTPException:
         raise
     except RateLimitError as exc:
-        logger.warning("OpenAI rate limit or quota error (request_id=%s)", exc.request_id)
+        error_code = getattr(exc, "code", None)
+        error_type = getattr(exc, "type", None)
+        logger.warning(
+            "OpenAI rate limit or quota error (code=%s, type=%s, request_id=%s)",
+            error_code,
+            error_type,
+            exc.request_id,
+        )
+        if error_code in {"insufficient_quota", "billing_hard_limit_reached"} or error_type == "insufficient_quota":
+            raise HTTPException(
+                status_code=503,
+                detail="The OpenAI API project has no available quota. Check its billing status and usage limits.",
+            ) from exc
         raise HTTPException(status_code=429, detail="The assistant is receiving too many requests. Please wait a moment and try again.") from exc
     except APITimeoutError as exc:
         raise HTTPException(status_code=504, detail="The assistant took too long to respond. Please try again.") from exc
