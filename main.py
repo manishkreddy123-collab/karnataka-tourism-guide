@@ -148,6 +148,9 @@ STYLE: Respond in clear, warm English. Use short sections or bullets for itinera
 def make_client() -> OpenAI:
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not key:
+        candidate = os.getenv("new_api_key", "").strip()
+        key = candidate if candidate.startswith("sk-") else ""
+    if not key:
         raise HTTPException(status_code=503, detail="Chat is not configured yet. Add OPENAI_API_KEY to the server's .env file.")
     return OpenAI(api_key=key, timeout=20.0, max_retries=1)
 
