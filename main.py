@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hmac
+import logging
 import os
 import sqlite3
 import time
@@ -29,6 +30,7 @@ KNOWLEDGE_PATH = ROOT / "knowledge.md"
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 HISTORY_LIMIT = 20
 REQUIRE_APP_AUTH = os.getenv("REQUIRE_APP_AUTH", "false").strip().casefold() in {"1", "true", "yes"}
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Karnataka Tourism Guide", version="1.0.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
@@ -221,12 +223,24 @@ def chat(request: ChatRequest) -> ChatResponse:
     except HTTPException:
         raise
     except RateLimitError as exc:
+        logger.warning("OpenAI rate limit or quota error (request_id=%s)", exc.request_id)
         raise HTTPException(status_code=429, detail="The assistant is receiving too many requests. Please wait a moment and try again.") from exc
     except APITimeoutError as exc:
         raise HTTPException(status_code=504, detail="The assistant took too long to respond. Please try again.") from exc
     except APIConnectionError as exc:
         raise HTTPException(status_code=503, detail="Could not reach the assistant service. Check the connection and try again.") from exc
     except APIStatusError as exc:
+        logger.error("OpenAI API request failed (status=%s, request_id=%s)", exc.status_code, exc.request_id)
+        if exc.status_code in {401, 403}:
+            raise HTTPException(
+                status_code=503,
+                detail="OpenAI rejected the configured API key or its permissions. Update OPENAI_API_KEY in the hosting settings.",
+            ) from exc
+        if exc.status_code == 404:
+            raise HTTPException(
+                status_code=503,
+                detail="The configured OpenAI model is unavailable. Check OPENAI_MODEL in the hosting settings.",
+            ) from exc
         raise HTTPException(status_code=502, detail="The assistant service returned an error. Please try again later.") from exc
     elapsed = round((time.perf_counter() - started) * 1000)
     reply_id = str(uuid.uuid4())
